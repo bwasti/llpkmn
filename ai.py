@@ -110,7 +110,6 @@ if __name__ == "__main__":
     #############
     # Main loop #
     #############
-    # history = []
     messages = [
         {"role": "system", "content": sys_prompt},
     ]
@@ -124,8 +123,8 @@ if __name__ == "__main__":
             model="feather", top_p=0.9, temperature=0.6, messages=messages
         )
         rm = response.choices[0].message
-        messages.append({"role": rm.role, "content": rm.content})
         print(rm.content)
+        messages.append({"role": rm.role, "content": rm.content})
         # 2. Now pick a button
         msg = get_button_msg(client)
         messages.append(msg)
@@ -140,4 +139,4 @@ if __name__ == "__main__":
         button = json.loads(button)["button"]
         messages.append({"role": rm.role, "content": button})
         tap_button(client_socket, button)
-        messages.append(response.choices[0].message)
+        print("MESSAGES", len(messages))
