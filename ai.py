@@ -13,11 +13,11 @@ from enum import Enum
 ##################
 host = os.getenv("HOST", "127.0.0.1:8080")
 print(f"Connecting to host {host}...")
-#client = OpenAI(base_url=f"http://{host}/v1", api_key="sk-test", timeout=9999)
+# client = OpenAI(base_url=f"http://{host}/v1", api_key="sk-test", timeout=9999)
 client = OpenAI(
     api_key="feather-dont-need-no-stinkin-api-key",
     base_url="http://localhost:8082/v1",
-    timeout=999
+    timeout=999,
 )
 
 ###################
@@ -69,6 +69,7 @@ def get_n_latest_pngs(directory, n=1):
 # keys = ["A","B","Select","Start","Right","Left","Up","Down","R","L"]
 keys = ["A", "B", "Right", "Left", "Up", "Down", "Start"]
 
+
 def get_opinion_msg(client):
     take_screenshot(client_socket, screenshot_dir)
     png = get_n_latest_pngs(screenshot_dir, 1)[-1]
@@ -77,16 +78,29 @@ def get_opinion_msg(client):
     content.append(
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}}
     )
-    content.append({"type": "text", "text": f"Look at this most recent image.  It is the current game state.  In plain but detailed English, think about and describe what our immediate next step should be to achieve our goal.  Be pragmatic and conclude which button we should press (the options are {keys})."})
+    content.append(
+        {
+            "type": "text",
+            "text": f"Look at this most recent image.  It is the current game state.  In plain but detailed English, think about and describe what our immediate next step should be to achieve our goal.  Be pragmatic and conclude which button we should press (the options are {keys}).",
+        }
+    )
     return {"role": "user", "content": content}
+
 
 def get_button_msg(client):
     content = []
-    content.append({"type": "text", "text": f"Now, given the above reasoning, choose the appropriate button to press in this current instance.  To go through doors, stand in front of them and press up.  To interact with people, press A.  Don't get stuck repeating the same thing!  You must respond with a valid button from this list: {keys}"})
+    content.append(
+        {
+            "type": "text",
+            "text": f"Now, given the above reasoning, choose the appropriate button to press in this current instance.  To go through doors, stand in front of them and press up.  To interact with people, press A.  Don't get stuck repeating the same thing!  You must respond with a valid button from this list: {keys}",
+        }
+    )
     return {"role": "user", "content": content}
+
 
 class GBAButtonResponse(BaseModel):
     button: Literal["A", "B", "Right", "Left", "Up", "Down", "Start"]
+
 
 sys_prompt = """
 You are playing Pokemon Emerald on game boy advanced.  You control the character in the middle of the screen.  Your general task is to walk around in the tall grass and train pokemon!  Fight every pokemon you encounter in the grass.  Fights are triggered randomly when walking.
@@ -96,7 +110,7 @@ if __name__ == "__main__":
     #############
     # Main loop #
     #############
-    #history = []
+    # history = []
     messages = [
         {"role": "system", "content": sys_prompt},
     ]
@@ -110,17 +124,20 @@ if __name__ == "__main__":
             model="feather", top_p=0.9, temperature=0.6, messages=messages
         )
         rm = response.choices[0].message
-        messages.append({"role":rm.role, "content": rm.content})
+        messages.append({"role": rm.role, "content": rm.content})
         print(rm.content)
         # 2. Now pick a button
         msg = get_button_msg(client)
         messages.append(msg)
         response = client.beta.chat.completions.parse(
-            model="feather", temperature=0.6, messages=messages, response_format=GBAButtonResponse
+            model="feather",
+            temperature=0.6,
+            messages=messages,
+            response_format=GBAButtonResponse,
         )
         rm = response.choices[0].message
         button = rm.content
         button = json.loads(button)["button"]
-        messages.append({"role":rm.role, "content": button})
+        messages.append({"role": rm.role, "content": button})
         tap_button(client_socket, button)
         messages.append(response.choices[0].message)
