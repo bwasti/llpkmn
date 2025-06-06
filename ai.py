@@ -2,15 +2,23 @@ import json
 import base64
 import time
 from openai import OpenAI
+from pydantic import BaseModel
+from typing import Literal
 from client import *
 from pathlib import Path
+from enum import Enum
 
 ##################
 # Connect to LLM #
 ##################
 host = os.getenv("HOST", "127.0.0.1:8080")
 print(f"Connecting to host {host}...")
-client = OpenAI(base_url=f"http://{host}/v1", api_key="sk-test", timeout=9999)
+#client = OpenAI(base_url=f"http://{host}/v1", api_key="sk-test", timeout=9999)
+client = OpenAI(
+    api_key="feather-dont-need-no-stinkin-api-key",
+    base_url="http://localhost:8082/v1",
+    timeout=999
+)
 
 ###################
 # Connect to mGBA #
@@ -37,7 +45,7 @@ print(f"Screenshots being saved to {screenshot_dir}")
 ############
 # Settings #
 ############
-history_limit = int(os.getenv("HISTORY_LIMIT", "8"))
+history_limit = int(os.getenv("HISTORY_LIMIT", "1"))
 # -1 == no stopping
 max_steps = int(os.getenv("MAX_STEPS", "-1"))
 
@@ -57,96 +65,62 @@ def get_n_latest_pngs(directory, n=1):
     return sorted_pngs[:n]
 
 
-prompt = """
-You are tasked with healing all the Pokemon in your party. Given the history provided, what button would you press now?
-
-The options are {keys}.
-
-Think about your answer out loud, and then conclude with a single button. (The button must be the final word or we cannot parse it.)
-"""
-prompt = os.getenv("PROMPT", prompt)
-print(f'Base prompt for the model:\n\n"""\n{prompt}\n"""')
-
 # the Select, R, and L keys are super rare to use. we can prune them to help the model out
 # keys = ["A","B","Select","Start","Right","Left","Up","Down","R","L"]
-keys = ["A", "B", "Start", "Right", "Left", "Up", "Down"]
+keys = ["A", "B", "Right", "Left", "Up", "Down", "Start"]
 
-
-def parse_action(s):
-    s_orig = s
-    s = s.replace(".", "")
-    s = s.lower()
-    s = s.split(" ")[-1]
-    for key in keys:
-        if key.lower() in s:
-            return key
-    raise Exception("Invalid action" + s_orig)
-
-
-def construct_prompt(hist_actions, hist_imgs):
-    assert len(hist_actions) == (
-        len(hist_imgs) - 1
-    ), f"{len(hist_actions)=}, {len(hist_imgs)=}"
-
+def get_opinion_msg(client):
+    take_screenshot(client_socket, screenshot_dir)
+    png = get_n_latest_pngs(screenshot_dir, 1)[-1]
+    img = encode_image(png)
     content = []
     content.append(
-        {"type": "text", "text": f"We started our game state with the following:"}
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}}
     )
-    first_img = hist_imgs[0]
-    content.append(
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{first_img}"},
-        }
-    )
-    for hist, img in zip(hist_actions, hist_imgs[1:]):
-        content.append(
-            {
-                "type": "text",
-                "text": f"This was your response at the time: {hist}, yielding the following game state:",
-            }
-        )
-        content.append(
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}}
-        )
-    content.append({"type": "text", "text": prompt.format(keys=keys)})
-    return content
+    content.append({"type": "text", "text": f"Look at this most recent image.  It is the current game state.  In plain but detailed English, think about and describe what our immediate next step should be to achieve our goal.  Be pragmatic and conclude which button we should press (the options are {keys})."})
+    return {"role": "user", "content": content}
 
+def get_button_msg(client):
+    content = []
+    content.append({"type": "text", "text": f"Now, given the above reasoning, choose the appropriate button to press in this current instance.  To go through doors, stand in front of them and press up.  To interact with people, press A.  Don't get stuck repeating the same thing!  You must respond with a valid button from this list: {keys}"})
+    return {"role": "user", "content": content}
 
-def take_action(client, history):
-    take_screenshot(client_socket, screenshot_dir)
-    pngs = get_n_latest_pngs(screenshot_dir, len(history) + 1)
-    imgs = [encode_image(png) for png in pngs]
-    content = construct_prompt(history, imgs)
-    resp = get_response(content)
-    action = parse_action(resp)
-    tap_button(client_socket, action)
-    time.sleep(1)
-    return resp
+class GBAButtonResponse(BaseModel):
+    button: Literal["A", "B", "Right", "Left", "Up", "Down", "Start"]
 
-
-def get_response(content):
-    messages = [{"role": "user", "content": content}]
-    response = client.chat.completions.create(
-        model="feather", temperature=0.0, stream=True, messages=messages
-    )
-    acc = ""
-    for chunk in response:
-        d = chunk.choices[0].delta.content
-        if d == None:
-            break
-        print(d, end="")
-        acc += d
-    print("\n")
-    return acc
-
+sys_prompt = """
+You are playing Pokemon Emerald on game boy advanced.  You control the character in the middle of the screen.  Your general task is to walk around in the tall grass and train pokemon!  Fight every pokemon you encounter in the grass.  Fights are triggered randomly when walking.
+"""
 
 if __name__ == "__main__":
     #############
     # Main loop #
     #############
-    history = []
+    #history = []
+    messages = [
+        {"role": "system", "content": sys_prompt},
+    ]
     while max_steps != 0:
         if max_steps > 0:
             max_steps -= 1
-        history.append(take_action(client_socket, history[-history_limit:]))
+        # 1. Describe the strategy
+        msg = get_opinion_msg(client)
+        messages.append(msg)
+        response = client.chat.completions.create(
+            model="feather", top_p=0.9, temperature=0.6, messages=messages
+        )
+        rm = response.choices[0].message
+        messages.append({"role":rm.role, "content": rm.content})
+        print(rm.content)
+        # 2. Now pick a button
+        msg = get_button_msg(client)
+        messages.append(msg)
+        response = client.beta.chat.completions.parse(
+            model="feather", temperature=0.6, messages=messages, response_format=GBAButtonResponse
+        )
+        rm = response.choices[0].message
+        button = rm.content
+        button = json.loads(button)["button"]
+        messages.append({"role":rm.role, "content": button})
+        tap_button(client_socket, button)
+        messages.append(response.choices[0].message)
